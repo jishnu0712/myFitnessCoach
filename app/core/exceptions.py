@@ -21,6 +21,13 @@ class BadRequestException(AppException):
     code = "BAD_REQUEST"
 
 
+class ConflictException(AppException):
+    """Represent a conflict with the current persisted resource state."""
+
+    status_code = 409
+    code = "RESOURCE_CONFLICT"
+
+
 class UnauthorizedException(AppException):
     """Represent a request that requires valid authentication credentials."""
 

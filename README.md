@@ -150,6 +150,35 @@ The `/api/v1/health/db` endpoint executes `SELECT 1`. It does not require domain
 returns HTTP 503 with a safe error if PostgreSQL cannot be reached. Tables are never created during
 application startup; apply Alembic migrations explicitly.
 
+## Authentication and workouts
+
+Apply the migrations before using account or workout endpoints. Public registration always creates
+the `user` role; the request schema does not accept a role. `admin` and `superadmin` are provisioned
+only by the explicit development/test seeder. Passwords are stored as Argon2id hashes, and login
+returns a short-lived JWT access token. Send it as `Authorization: Bearer <token>`.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/v1/auth/register` | Register with `email` and `password` |
+| `POST` | `/api/v1/auth/login` | Exchange JSON email/password for an access token |
+| `GET` | `/api/v1/auth/me` | Return the authenticated account |
+| `POST` | `/api/v1/workouts` | Save `workout_data` JSON for the authenticated user |
+| `GET` | `/api/v1/workouts` | List the authenticated user's workouts (`limit`, `offset`) |
+
+Workout records are stored separately from account data. Their JSON payload is intentionally
+flexible; all list queries are scoped to the token's account.
+
+Configure `AUTH_SECRET_KEY` with a unique secret of at least 32 characters in production and set
+`ACCESS_TOKEN_EXPIRE_MINUTES` to the desired access-token lifetime. The development default is
+not suitable for deployment. Migrations create the users and workouts tables; the API does not
+create tables on startup.
+
+The test-account seeder is explicit and never runs as part of application startup. In a
+development/test environment, configure `SEED_SUPERADMIN_EMAIL`, `SEED_SUPERADMIN_PASSWORD`,
+`SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_USER_EMAIL`, and `SEED_USER_PASSWORD`, then run
+`python -m app.seed_test_accounts` from `backend/`. It creates missing accounts only and will not
+reset existing credentials. Do not use sample seeder values outside local testing.
+
 ## Configuration
 
 Settings are loaded by `pydantic-settings` from process environment variables and, for local use,
@@ -162,6 +191,9 @@ the `.env` file in the current working directory. Environment variables take pre
 | `DEBUG` | FastAPI debug behavior; keep `false` in production. |
 | `DATABASE_URL` | SQLAlchemy async URL, for example `postgresql+asyncpg://user:password@localhost:5432/fitness_db`. |
 | `LOG_LEVEL` | Standard logging level, such as `INFO` or `DEBUG`. |
+| `AUTH_SECRET_KEY` | JWT signing secret; use a unique secret of at least 32 characters in production. |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT access-token lifetime in minutes; defaults to `30`. |
+| `SEED_*_EMAIL` / `SEED_*_PASSWORD` | Optional per-role credentials required only for the explicit test-account seeder. |
 | `POSTGRES_DB` | Compose PostgreSQL database name. |
 | `POSTGRES_USER` | Compose PostgreSQL user. |
 | `POSTGRES_PASSWORD` | Compose PostgreSQL password. |
@@ -234,7 +266,10 @@ docker compose ps
 
 Compose waits for PostgreSQL's `pg_isready` check before starting the API. PostgreSQL data persists
 in the named `postgres_data` volume. The API connects to the `db` service hostname over the Compose
-network. The app container runs as a non-root user and has its own HTTP health check.
+network. PostgreSQL is published on `127.0.0.1:5432` for local host tools only; it is not bound to
+external network interfaces. For Alembic commands run on your host, set `DATABASE_URL` to use
+`localhost:5432`. For commands run inside the API container, use the Compose hostname `db:5432`.
+The app container runs as a non-root user and has its own HTTP health check.
 
 Run migrations, view logs, and stop the stack with:
 
@@ -312,12 +347,14 @@ Create a SQLAlchemy 2 model that inherits from `app.models.base.Base`, using `Ma
 and review a migration with Alembic. Implement feature-specific SQL in a repository and business
 rules in a service. Do not call `Base.metadata.create_all()` from application startup.
 
-## Starter limitations
+## Current limitations
 
-- There are no product entities, authentication, authorization, or user-specific data yet.
-- The initial migration has no feature tables; it establishes a revision baseline only.
-- Test coverage focuses on health endpoints and common error envelopes, not real PostgreSQL
-  integration or migration execution.
+- Refresh tokens, password reset, email verification, OAuth, and role-management endpoints are not
+  included. Public registration cannot create privileged roles.
+- Workout payloads are flexible JSON; exercise-level validation and workout update/delete endpoints
+  are not included.
+- Tests use an in-memory database double for API contracts and do not replace running the Alembic
+  migration against PostgreSQL in a disposable integration environment.
 - Dependency ranges are declared but not locked; deployment should use a reviewed lock/build
   process and external secret management.
 - Production deployment still needs environment-specific concerns such as TLS termination, secrets,
